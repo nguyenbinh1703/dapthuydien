@@ -1,0 +1,622 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+    <meta charset="UTF-8">
+    <!-- user-scalable=no: Cần thiết vì pinch-zoom xung đột với OrbitControls 3D -->
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <meta name="description" content="Mô hình 3D đập thuỷ điện — Phép chiếu vuông góc">
+    <meta property="og:title" content="Vận dụng - Đập thuỷ điện">
+    <meta property="og:description" content="Mô hình 3D đập thuỷ điện — Phép chiếu vuông góc">
+    <title>Vận dụng - Đập thuỷ điện</title>
+	<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>💧</text></svg>">
+    <link rel="modulepreload" href="https://unpkg.com/three@0.160.0/build/three.module.js">
+    <style>
+        body { 
+            margin: 0; 
+            overflow: hidden; 
+            background-color: #f4f6f9; 
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+
+			/* Chặn bôi đen văn bản */
+			-webkit-user-select: none; /* Safari */
+			-moz-user-select: none;    /* Firefox */
+			-ms-user-select: none;     /* IE 10+ */
+			user-select: none;         /* Standard */
+        }
+        canvas { display: block; touch-action: none; outline: none; }
+        canvas:focus-visible { outline: 2px solid #2c3e50; outline-offset: -2px; }
+        
+        #instruction {
+            position: absolute;
+            top: 25px;
+            left: 50%;
+            transform: translateX(-50%);
+            background: rgba(255, 255, 255, 0.85);
+            backdrop-filter: blur(12px);
+            -webkit-backdrop-filter: blur(12px);
+            padding: 12px 25px;
+            border-radius: 30px;
+            font-size: 14px;
+            font-weight: 600;
+            color: #2c3e50;
+            box-shadow: 0 8px 20px rgba(0,0,0,0.06);
+            pointer-events: none;
+            border: 1px solid rgba(255,255,255,0.6);
+            white-space: nowrap;
+            z-index: 10;
+        }
+
+        /* ===== LOADING SCREEN ===== */
+        #loading-screen {
+            position: fixed;
+            top: 0; left: 0;
+            width: 100%; height: 100%;
+            background: #f4f6f9;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            z-index: 100;
+            transition: opacity 0.6s ease-out;
+        }
+        #loading-screen.fade-out {
+            opacity: 0;
+            pointer-events: none;
+        }
+        .spinner {
+            width: 36px; height: 36px;
+            border: 3px solid rgba(44, 62, 80, 0.12);
+            border-top-color: #2c3e50;
+            border-radius: 50%;
+            animation: spin 0.8s linear infinite;
+        }
+        @keyframes spin { to { transform: rotate(360deg); } }
+        #loading-screen p {
+            margin-top: 16px;
+            font-size: 13px;
+            font-weight: 500;
+            color: #95a5a6;
+            letter-spacing: 0.3px;
+        }
+
+        /* ===== ACCESSIBILITY: Tôn trọng cài đặt giảm chuyển động ===== */
+        @media (prefers-reduced-motion: reduce) {
+            .spinner { animation: none; }
+            #loading-screen { transition: none; }
+        }
+
+        /* ===== NÚT RESET CAMERA ===== */
+        #reset-btn {
+            position: absolute;
+            bottom: 25px;
+            right: 25px;
+            background: rgba(255, 255, 255, 0.85);
+            backdrop-filter: blur(12px);
+            -webkit-backdrop-filter: blur(12px);
+            border: 1px solid rgba(255,255,255,0.6);
+            border-radius: 30px;
+            padding: 10px 18px;
+            font-size: 13px;
+            font-weight: 600;
+            color: #2c3e50;
+            cursor: pointer;
+            box-shadow: 0 8px 20px rgba(0,0,0,0.06);
+            z-index: 10;
+            transition: transform 0.15s ease, box-shadow 0.15s ease;
+            user-select: none;
+            -webkit-user-select: none;
+        }
+        #reset-btn:hover {
+            transform: scale(1.05);
+            box-shadow: 0 10px 25px rgba(0,0,0,0.1);
+        }
+        #reset-btn:active {
+            transform: scale(0.97);
+        }
+
+        /* ===== WEBGL ERROR FALLBACK ===== */
+        #webgl-error {
+            display: none;
+            position: fixed;
+            top: 0; left: 0;
+            width: 100%; height: 100%;
+            background: #f4f6f9;
+            z-index: 200;
+            padding: 30px;
+            box-sizing: border-box;
+            text-align: center;
+        }
+        /* Tách riêng state hiển thị — rõ ràng, dễ bảo trì */
+        #webgl-error.active {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+        }
+        #webgl-error h2 { color: #2c3e50; margin-bottom: 12px; font-size: 18px; }
+        #webgl-error p { color: #7f8c8d; font-size: 14px; max-width: 400px; line-height: 1.6; }
+    </style>
+</head>
+<body>
+    <!-- Loading Screen — Hiện ngay khi mở trang, ẩn khi 3D sẵn sàng -->
+    <div id="loading-screen" role="status" aria-live="polite">
+        <div class="spinner" aria-hidden="true"></div>
+        <p>Đang tải mô hình</p>
+    </div>
+
+    <!-- WebGL Error Fallback — Chỉ hiện khi trình duyệt không hỗ trợ -->
+    <div id="webgl-error" role="alert">
+        <h2>&#9888;&#65039; Không hỗ trợ đồ họa 3D</h2>
+        <p>Trình duyệt của bạn chưa hỗ trợ WebGL. Vui lòng sử dụng Chrome, Safari, Firefox hoặc Edge phiên bản mới nhất.</p>
+    </div>
+
+    <button id="reset-btn" aria-label="Reset góc nhìn camera">&#8634; Reset</button>
+
+    <script type="importmap">
+        {
+            "imports": {
+                "three": "https://unpkg.com/three@0.160.0/build/three.module.js",
+                "three/addons/": "https://unpkg.com/three@0.160.0/examples/jsm/"
+            }
+        }
+    </script>
+    
+    <script type="module">
+        async function init3D() {
+            try {
+                // =========================================================
+                // 0. KIỂM TRA WEBGL & TẢI THƯ VIỆN ĐỘNG (ERROR BOUNDARY)
+                // =========================================================
+                const testCanvas = document.createElement('canvas');
+                const gl = testCanvas.getContext('webgl2') || testCanvas.getContext('webgl');
+                if (!gl) throw new Error('WebGL not supported');
+
+                // Tải thư viện thông qua Dynamic Import để bắt lỗi Network an toàn
+                const THREE = await import('three');
+                const { OrbitControls } = await import('three/addons/controls/OrbitControls.js');
+
+                // =========================================================
+                // 1. SCENE & CAMERA TRỰC GIAO
+                // =========================================================
+                const scene = new THREE.Scene();
+                const aspect = window.innerWidth / window.innerHeight;
+                const baseSize = 22; 
+                const viewSize = aspect < 1 ? baseSize / aspect : baseSize; 
+
+                // Near/far thu hẹp: scene ~65 units diagonal → range 300 đủ, depth precision tốt hơn ~6.7x
+                const camera = new THREE.OrthographicCamera(
+                    -viewSize * aspect, viewSize * aspect, 
+                    viewSize, -viewSize, -100, 200 
+                );
+                camera.position.set(-75, 55, -75); 
+
+                // Lưu trạng thái ban đầu cho nút Reset
+                const initialCameraPos = camera.position.clone();
+                const initialTarget = new THREE.Vector3(12.5, 9, -2.5);
+
+                const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
+                renderer.setSize(window.innerWidth, window.innerHeight);
+                renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+                renderer.domElement.tabIndex = 0; // Accessibility: Focusable canvas
+                document.body.appendChild(renderer.domElement);
+
+                const controls = new OrbitControls(camera, renderer.domElement);
+                controls.enableDamping = true;
+                controls.dampingFactor = 0.05;
+                controls.target.copy(initialTarget); 
+                controls.minZoom = 0.7; 
+                controls.maxZoom = 3.0;
+
+                // Cho phép xoay tự do 360° — nhìn chính diện vuông góc tuyệt đối từ mọi hướng
+                controls.minPolarAngle = 0;
+                controls.maxPolarAngle = Math.PI;
+
+                // =========================================================
+                // 2. HỆ THỐNG ÁNH SÁNG
+                // =========================================================
+                scene.add(new THREE.AmbientLight(0xffffff, 0.75));
+                const dirLight = new THREE.DirectionalLight(0xffffff, 0.8);
+                dirLight.position.set(20, 50, 40);
+                scene.add(dirLight);
+
+                // =========================================================
+                // 3. TOẠ ĐỘ & DỮ LIỆU
+                // =========================================================
+                function pt(x, y, z) { return new THREE.Vector3(x, z, -y); }
+                const d = 4;
+                const A = pt(0, 0, d), B = pt(0, 7, d), C = pt(0, 1.5, 10 + d), D = pt(0, 0, 10 + d);
+                const A_phay = pt(30, 0, d), B_phay = pt(30, 7, d), C_phay = pt(30, 1.5, 10 + d), D_phay = pt(30, 0, 10 + d);
+
+                // =========================================================
+                // NHÓM ĐỐI TƯỢNG — Scene Hierarchy (THREE.Group)
+                // =========================================================
+                const damGroup = new THREE.Group();
+                const wallGroup = new THREE.Group();
+                scene.add(damGroup);
+                scene.add(wallGroup);
+
+                // Danh sách tài nguyên cần giải phóng khi cleanup
+                const disposables = [];
+
+                const prismGeometry = new THREE.BufferGeometry();
+                const vertices = new Float32Array([
+                    ...A.toArray(), ...B.toArray(), ...C.toArray(), ...A.toArray(), ...C.toArray(), ...D.toArray(),
+                    ...A_phay.toArray(), ...C_phay.toArray(), ...B_phay.toArray(), ...A_phay.toArray(), ...D_phay.toArray(), ...C_phay.toArray(),
+                    ...A.toArray(), ...A_phay.toArray(), ...B_phay.toArray(), ...A.toArray(), ...B_phay.toArray(), ...B.toArray(),
+                    ...D.toArray(), ...C_phay.toArray(), ...C.toArray(), ...D.toArray(), ...D_phay.toArray(), ...C_phay.toArray(),
+                    ...B.toArray(), ...B_phay.toArray(), ...C_phay.toArray(), ...B.toArray(), ...C_phay.toArray(), ...C.toArray(),
+                    ...D.toArray(), ...A.toArray(), ...A_phay.toArray(), ...D.toArray(), ...A_phay.toArray(), ...D_phay.toArray()
+                ]);
+                prismGeometry.setAttribute('position', new THREE.BufferAttribute(vertices, 3));
+                prismGeometry.computeVertexNormals();
+
+                const edgesGeo = new THREE.EdgesGeometry(prismGeometry);
+                disposables.push(prismGeometry, edgesGeo);
+
+                // =========================================================
+                // 4. BỘ ĐỆM CHIỀU SÂU & XỬ LÝ NÉT THẤY/KHUẤT CHO KHỐI LĂNG TRỤ
+                // =========================================================
+
+                // Khối tàng hình (cản tia nhìn, đánh dấu vị trí bị che khuất)
+                const depthMat = new THREE.MeshBasicMaterial({ 
+                    colorWrite: false, depthWrite: true, side: THREE.DoubleSide,
+                    polygonOffset: true, polygonOffsetFactor: 3, polygonOffsetUnits: 3
+                });
+                const prismDepthMesh = new THREE.Mesh(prismGeometry, depthMat);
+                prismDepthMesh.renderOrder = 0; // Depth pre-pass: render TRƯỚC tất cả
+                damGroup.add(prismDepthMesh);
+
+                // Nét thấy lăng trụ (Màu đậm)
+                const visibleEdgeMat = new THREE.LineBasicMaterial({ color: 0x1e293b, depthTest: true, depthWrite: false });
+                const visibleEdges = new THREE.LineSegments(edgesGeo, visibleEdgeMat);
+                visibleEdges.renderOrder = 5; // Edge pass: render SAU depth pre-pass
+                damGroup.add(visibleEdges);
+
+                // Nét khuất lăng trụ (Nét đứt, chỉ hiện khi bị che)
+                const hiddenEdgeMat = new THREE.LineDashedMaterial({ 
+                    color: 0x8291b5, dashSize: 0.6, gapSize: 0.4, 
+                    depthTest: true, depthWrite: false, depthFunc: THREE.GreaterDepth 
+                });
+                const hiddenLines = new THREE.LineSegments(edgesGeo, hiddenEdgeMat);
+                hiddenLines.computeLineDistances();
+                hiddenLines.renderOrder = 5; // Edge pass: cùng lớp với nét thấy
+                damGroup.add(hiddenLines);
+
+                // Mặt kính lăng trụ
+                const prismMat = new THREE.MeshPhysicalMaterial({ 
+                    color: 0x7D7DFF, transparent: true, opacity: 0.5, 
+                    roughness: 0.1, clearcoat: 0.6, side: THREE.DoubleSide, depthWrite: false 
+                });
+                const prismMesh = new THREE.Mesh(prismGeometry, prismMat);
+                prismMesh.renderOrder = 10; // Transparent pass: render SAU CÙNG
+                damGroup.add(prismMesh);
+
+                disposables.push(depthMat, visibleEdgeMat, hiddenEdgeMat, prismMat);
+
+                // =========================================================
+                // 5. ÁP DỤNG NÉT THẤY/KHUẤT CHO CẢ GIAO TUYẾN TƯỜNG
+                // =========================================================
+                
+                // Nét liền cho viền tường (Khi không bị khối lăng trụ che)
+                const visibleWallEdgeMat = new THREE.LineBasicMaterial({ 
+                    color: 0x90a4ae, depthTest: true, depthWrite: false 
+                });
+
+                // Nét đứt cho viền tường (Kích hoạt khi bị khối tàng hình của lăng trụ đè lên phía trước)
+                const hiddenWallEdgeMat = new THREE.LineDashedMaterial({ 
+                    color: 0x90a4ae, dashSize: 0.6, gapSize: 0.4, 
+                    depthTest: true, depthWrite: false, depthFunc: THREE.GreaterDepth 
+                });
+
+                // Material dùng chung cho tất cả bề mặt tường (Tối ưu: 1 instance thay vì 3)
+                const wallSurfaceMat = new THREE.MeshPhysicalMaterial({ 
+                    color: 0xb0bec5, transparent: true, opacity: 0.2, side: THREE.DoubleSide, depthWrite: false 
+                });
+
+                // ★ MỚI: Material depth-only cho tường (ghi depth buffer, không render pixel)
+                // → Cho phép tường tham gia depth test, chắn đúng nét thấy/khuất
+                const wallDepthMat = new THREE.MeshBasicMaterial({
+                    colorWrite: false,
+                    depthWrite: true,
+                    side: THREE.DoubleSide,
+                    polygonOffset: true,
+                    polygonOffsetFactor: 3,
+                    polygonOffsetUnits: 3
+                });
+
+                disposables.push(visibleWallEdgeMat, hiddenWallEdgeMat, wallSurfaceMat, wallDepthMat);
+
+                // =========================================================
+                // KHẮC PHỤC: GỘP 3 BỨC TƯỜNG THÀNH 1 KHỐI GEOMETRY DUY NHẤT
+                // =========================================================
+                const wallGeo = new THREE.BufferGeometry();
+                
+                // Khai báo 7 đỉnh độc lập cấu tạo nên 3 bức tường (Dùng chung đỉnh tại giao tuyến)
+                const wallVertices = new Float32Array([
+                    ...pt(-15, -10, 0).toArray(),  // 0: Góc dưới trái (Tường Bằng & Đứng)
+                    ...pt(40, -10, 0).toArray(),   // 1: Góc chung ngã ba (Giao cả 3 tường)
+                    ...pt(40, -10, 18).toArray(),  // 2: Góc trên phải (Tường Đứng & Cạnh)
+                    ...pt(-15, -10, 18).toArray(), // 3: Góc trên trái (Tường Đứng)
+                    ...pt(40, 15, 0).toArray(),    // 4: Góc dưới phải (Tường Bằng & Cạnh)
+                    ...pt(40, 15, 18).toArray(),   // 5: Góc trên phải cao (Tường Cạnh)
+                    ...pt(-15, 15, 0).toArray()    // 6: Góc trên trái cao (Tường Bằng)
+                ]);
+                
+                wallGeo.setAttribute('position', new THREE.BufferAttribute(wallVertices, 3));
+                
+                // Nối các đỉnh thành mặt phẳng (Mỗi mặt gồm 2 tam giác)
+                wallGeo.setIndex([
+                    0, 1, 2, 0, 2, 3, // Tường Đứng
+                    1, 4, 5, 1, 5, 2, // Tường Cạnh
+                    0, 1, 4, 0, 4, 6  // Tường Bằng
+                ]);
+                wallGeo.computeVertexNormals();
+
+                // 1. Khối tàng hình (Ghi depth buffer — chặn tia nhìn, tạo nét khuất)
+                const wallDepthMesh = new THREE.Mesh(wallGeo, wallDepthMat);
+                wallDepthMesh.renderOrder = 0; 
+                wallGroup.add(wallDepthMesh);
+                
+                // 2. Bề mặt tường mờ trong suốt
+                const wallMesh = new THREE.Mesh(wallGeo, wallSurfaceMat);
+                wallMesh.renderOrder = 10; 
+                wallGroup.add(wallMesh);
+                
+                // 3. Trích xuất giao tuyến (EdgesGeometry tự động bỏ đường trùng lặp vì đã dùng chung đỉnh)
+                const wallEdgesGeo = new THREE.EdgesGeometry(wallGeo);
+                
+                // 3a. Lớp giao tuyến thấy (Nét liền)
+                const visibleWallEdges = new THREE.LineSegments(wallEdgesGeo, visibleWallEdgeMat);
+                visibleWallEdges.renderOrder = 5;
+                wallGroup.add(visibleWallEdges);
+                
+                // 3b. Lớp giao tuyến khuất xuyên thấu (Nét đứt)
+                const hiddenWallEdges = new THREE.LineSegments(wallEdgesGeo, hiddenWallEdgeMat);
+                hiddenWallEdges.computeLineDistances(); // Bắt buộc để nét đứt hoạt động
+                hiddenWallEdges.renderOrder = 5;
+                wallGroup.add(hiddenWallEdges);
+
+                // Thêm vào danh sách dọn dẹp bộ nhớ
+                disposables.push(wallGeo, wallEdgesGeo);
+
+                // =========================================================
+                // 6. RENDER LOOP — ON-DEMAND (Tiết kiệm ~95% GPU khi không tương tác)
+                // =========================================================
+                let needsRender = true;
+                let isAnimating = false;
+                let animationFrameId = null;
+                let resetAnimationId = null; // Track reset animation riêng — tránh khoá controls
+
+                // Giới hạn pan — Ngăn người dùng kéo mô hình ra xa vô hạn
+                const panMin = new THREE.Vector3(-10, -5, -25);
+                const panMax = new THREE.Vector3(40, 25, 10);
+
+                // Gộp 1 listener duy nhất — tối ưu overhead (thay vì 2 listener riêng)
+                function onControlsChange() {
+                    // Khắc phục Jitter: Clamp mục tiêu đồng thời dịch chuyển cả camera theo độ dời
+                    const oldTarget = controls.target.clone();
+                    controls.target.clamp(panMin, panMax);
+                    const delta = controls.target.clone().sub(oldTarget);
+                    if (delta.lengthSq() > 0) {
+                        camera.position.add(delta);
+                    }
+                    needsRender = true;
+                }
+                controls.addEventListener('change', onControlsChange);
+
+                function animate() {
+                    animationFrameId = requestAnimationFrame(animate);
+                    controls.update(); // Cập nhật damping → tự fire 'change' nếu camera đang trôi
+                    if (needsRender) {
+                        renderer.render(scene, camera);
+                        needsRender = false;
+                    }
+                }
+
+                // First render + bắt đầu loop
+                controls.update();
+                renderer.render(scene, camera);
+                animate();
+                isAnimating = true;
+
+                // =========================================================
+                // 6.5. LOADING SCREEN FADE-OUT
+                // =========================================================
+                const loadingScreen = document.getElementById('loading-screen');
+                loadingScreen.classList.add('fade-out');
+                setTimeout(() => loadingScreen.remove(), 700); // Xóa khỏi DOM sau animation
+
+                // =========================================================
+                // 7. THÍCH ỨNG MÀN HÌNH ĐIỆN THOẠI/PC
+                // =========================================================
+                function onResize() {
+                    const aspect = window.innerWidth / window.innerHeight;
+                    const currentViewSize = aspect < 1 ? baseSize / aspect : baseSize;
+                    camera.left = -currentViewSize * aspect;
+                    camera.right = currentViewSize * aspect;
+                    camera.top = currentViewSize;
+                    camera.bottom = -currentViewSize;
+                    camera.updateProjectionMatrix();
+                    renderer.setSize(window.innerWidth, window.innerHeight);
+                    needsRender = true;
+                }
+
+                window.addEventListener('resize', onResize);
+
+                // Edge case: Samsung Internet, UC Browser không fire resize đúng khi xoay
+                function onOrientationChange() {
+                    setTimeout(onResize, 150);
+                }
+                window.addEventListener('orientationchange', onOrientationChange);
+
+                // =========================================================
+                // 8. TIẾT KIỆM PIN — PAUSE HOÀN TOÀN KHI ẨN TAB
+                // =========================================================
+
+                // Helper: Force-complete reset animation nếu đang chạy dở
+                // → Tránh BUG khoá controls khi user chuyển tab giữa chừng reset
+                function forceCompleteReset() {
+                    if (resetAnimationId) {
+                        cancelAnimationFrame(resetAnimationId);
+                        resetAnimationId = null;
+                        camera.position.copy(initialCameraPos);
+                        controls.target.copy(initialTarget);
+                        camera.zoom = 1;
+                        camera.updateProjectionMatrix();
+                        controls.enabled = true;
+                    }
+                }
+
+                function onVisibilityChange() {
+                    if (document.hidden) {
+                        // Tab bị ẩn → dừng render loop hoàn toàn
+                        if (animationFrameId) {
+                            cancelAnimationFrame(animationFrameId);
+                            animationFrameId = null;
+                            isAnimating = false;
+                        }
+                        // Force-complete reset nếu đang chạy dở → tránh khoá controls
+                        forceCompleteReset();
+                    } else {
+                        // Tab được mở lại → khởi động lại render loop
+                        if (!isAnimating) {
+                            needsRender = true;
+                            animate();
+                            isAnimating = true;
+                        }
+                    }
+                }
+                document.addEventListener('visibilitychange', onVisibilityChange);
+
+                // =========================================================
+                // 9. NÚT RESET CAMERA — Animation mượt mà (ease-out cubic)
+                // =========================================================
+                const prefersReducedMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+
+                document.getElementById('reset-btn').addEventListener('click', () => {
+                    // Nếu đang reset → bỏ qua, tránh chồng animation
+                    if (resetAnimationId) return;
+
+                    // Tắt controls trong lúc animate để tránh xung đột
+                    controls.enabled = false;
+
+                    // Accessibility: Skip animation nếu user bật "Giảm chuyển động" trên OS
+                    const duration = prefersReducedMotion ? 0 : 600; // ms
+                    const startTime = performance.now();
+                    const startPos = camera.position.clone();
+                    const startTarget = controls.target.clone();
+                    const startZoom = camera.zoom;
+
+                    function animateReset(now) {
+                        const elapsed = now - startTime;
+                        const t = Math.min(elapsed / duration, 1);
+                        // Ease-out cubic: chậm dần khi gần đích → cảm giác tự nhiên
+                        const ease = duration === 0 ? 1 : 1 - Math.pow(1 - t, 3);
+
+                        camera.position.lerpVectors(startPos, initialCameraPos, ease);
+                        controls.target.lerpVectors(startTarget, initialTarget, ease);
+                        camera.zoom = startZoom + (1 - startZoom) * ease;
+                        camera.updateProjectionMatrix();
+                        renderer.render(scene, camera);
+
+                        if (t < 1) {
+                            resetAnimationId = requestAnimationFrame(animateReset);
+                        } else {
+                            // Animation xong → bật lại controls, xoá tracking
+                            resetAnimationId = null;
+                            controls.enabled = true;
+                            controls.update();
+                            needsRender = true;
+                        }
+                    }
+                    resetAnimationId = requestAnimationFrame(animateReset);
+                });
+
+                // =========================================================
+                // 10. MEMORY CLEANUP — Giải phóng tài nguyên (cho SPA/React/Vue)
+                // =========================================================
+                window.__cleanupDemo = function() {
+                    // Dừng render loop
+                    if (animationFrameId) cancelAnimationFrame(animationFrameId);
+                    
+                    // Dừng reset animation nếu đang chạy dở
+                    forceCompleteReset();
+                    
+                    // Giải phóng controls + gỡ listener thủ công
+                    controls.removeEventListener('change', onControlsChange);
+                    controls.dispose();
+                    
+                    // Giải phóng tất cả geometry + material và xoá scene
+                    disposables.forEach(d => d.dispose());
+                    scene.clear();
+                    
+                    // Giải phóng renderer + xóa canvas
+                    renderer.dispose();
+                    renderer.domElement.remove();
+                    
+                    // Gỡ TẤT CẢ event listeners — zero leak
+                    window.removeEventListener('resize', onResize);
+                    window.removeEventListener('orientationchange', onOrientationChange);
+                    document.removeEventListener('visibilitychange', onVisibilityChange);
+                };
+
+            } catch (error) {
+                // =========================================================
+                // ERROR BOUNDARY — Bắt mọi lỗi runtime, Network & Import
+                // =========================================================
+                console.error('Lỗi khởi tạo mô hình 3D:', error);
+                
+                const loadingEl = document.getElementById('loading-screen');
+                if (loadingEl) loadingEl.style.display = 'none';
+                
+                const errorScreen = document.getElementById('webgl-error');
+                errorScreen.classList.add('active');
+                
+                if (error.name === 'TypeError' && (error.message.includes('fetch') || error.message.includes('module'))) {
+                    errorScreen.innerHTML = `
+                        <h2 style="color:#2c3e50; margin-bottom:12px; font-size:18px;">&#9888;&#65039; Lỗi kết nối</h2>
+                        <p style="color:#7f8c8d; font-size:14px; max-width:400px; line-height:1.6;">Không thể tải thư viện 3D. Vui lòng kiểm tra kết nối mạng của bạn hoặc thử lại sau.</p>`;
+                } else if (error.message !== 'WebGL not supported') {
+                    errorScreen.innerHTML = `
+                        <h2 style="color:#2c3e50; margin-bottom:12px; font-size:18px;">&#9888;&#65039; Đã xảy ra lỗi</h2>
+                        <p style="color:#7f8c8d; font-size:14px; max-width:400px; line-height:1.6;">Không thể khởi tạo mô hình 3D.<br>Vui lòng tải lại trang hoặc thử trình duyệt khác.</p>`;
+                }
+            }
+        }
+
+        init3D();
+		// Chặn menu chuột phải
+		document.addEventListener('contextmenu', function(e) {
+			e.preventDefault();
+		});
+
+		// Chặn các phím tắt phổ biến
+		document.addEventListener('keydown', function(e) {
+			// Chặn F12
+			if (e.key === 'F12' || e.keyCode === 123) {
+				e.preventDefault();
+			}
+			
+			// Kiểm tra nếu phím Ctrl (Windows) hoặc Cmd (Mac) đang được giữ
+			if (e.ctrlKey || e.metaKey) {
+				const key = e.key.toLowerCase();
+				
+				// Chặn Ctrl+Shift+I, Ctrl+Shift+J, Ctrl+Shift+C (Mở Developer Tools)
+				if (e.shiftKey && (key === 'i' || key === 'j' || key === 'c')) {
+					e.preventDefault();
+				}
+				
+				// Chặn Ctrl+U (Xem nguồn), Ctrl+S (Lưu trang), Ctrl+P (In ấn)
+				if (key === 'u' || key === 's' || key === 'p') {
+					e.preventDefault();
+				}
+			}
+		});
+
+		// Chặn kéo thả hình ảnh/phần tử ra ngoài
+		document.addEventListener('dragstart', function(e) {
+			e.preventDefault();
+		});
+    </script>
+</body>
+</html>
